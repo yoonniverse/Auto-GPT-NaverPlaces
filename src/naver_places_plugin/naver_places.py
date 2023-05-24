@@ -210,6 +210,9 @@ def search_places(
     driver.get(naver_map_search_url)
     time.sleep(2)
     elements = driver.find_elements_by_css_selector('ul.search_list._items a.a_item.a_item_distance._linkSiteview[data-cid]')[:max_results]
+    if len(elements) == 0:
+        driver.quit()
+        return []
     def get_place_details_(place_url):
         return get_place_details(place_url, do_summarize_reviews=do_summarize_reviews)
     with concurrent.futures.ThreadPoolExecutor(len(elements)) as executor:
