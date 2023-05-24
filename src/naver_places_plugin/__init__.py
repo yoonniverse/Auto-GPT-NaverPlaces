@@ -41,7 +41,7 @@ class NaverPlacesPlugin(AutoGPTPluginTemplate):
         """
 
         prompt.add_command(
-            "Search Naver for place(restaurant, cafe, accommodation, tourist site, etc) information",
+            "Search Naver for Korean place(restaurant, cafe, accommodation, tourist site, etc)",
             "search_places_naver",
             {"query": "search query in Korean (ex. 신림역 근처 순대맛집, 여수 호텔, 제주공항 근처 관광지, 광교호수 카페)"},
             search_places,
