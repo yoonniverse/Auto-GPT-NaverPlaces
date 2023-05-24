@@ -170,24 +170,24 @@ def get_place_details(place_url, do_summarize_reviews=True):
     soup = BeautifulSoup(driver.page_source, 'html.parser')
     reviews = get_reviews(soup, do_summarize_reviews=do_summarize_reviews)
     details['reviews'] = reviews
-    if place_type  == 'restaurant':
-        # menus
-        driver.get(f'{place_url}/menu/list')
-        time.sleep(1)
-        if 'menu' in driver.current_url:
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            menus = soup.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
-            menus = [' '.join(menu.find_all(string=True, recursive=True)).strip() for menu in menus]
-            details['menus'] = menus[:5]
-    if place_type == 'accommodation':
-        # rooms
-        driver.get(f'{place_url}/room')
-        time.sleep(1)
-        if 'room' in driver.current_url:
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            rooms = soup.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
-            rooms = [' '.join(room.find_all(string=True, recursive=True)).strip() for room in rooms]
-            details['rooms'] = rooms
+    # if place_type  == 'restaurant':
+    #     # menus
+    #     driver.get(f'{place_url}/menu/list')
+    #     time.sleep(1)
+    #     if 'menu' in driver.current_url:
+    #         soup = BeautifulSoup(driver.page_source, 'html.parser')
+    #         menus = soup.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
+    #         menus = [' '.join(menu.find_all(string=True, recursive=True)).strip() for menu in menus]
+    #         details['menus'] = menus[:5]
+    # if place_type == 'accommodation':
+    #     # rooms
+    #     driver.get(f'{place_url}/room')
+    #     time.sleep(1)
+    #     if 'room' in driver.current_url:
+    #         soup = BeautifulSoup(driver.page_source, 'html.parser')
+    #         rooms = soup.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
+    #         rooms = [' '.join(room.find_all(string=True, recursive=True)).strip() for room in rooms]
+    #         details['rooms'] = rooms
     driver.quit()
     return details
 
