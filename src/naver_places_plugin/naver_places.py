@@ -40,7 +40,7 @@ def split_text(text, max_tokens=500, overlap=0, model='gpt-3.5-turbo'):
         sid = eid - overlap
     return splitted
 
-def truncate_messages(messages, system_prompt="", model='gpt-3.5-turbo', n_response_tokens=500, keep_last=True):
+def truncate_messages(messages, system_prompt="", model='gpt-3.5-turbo', n_response_tokens=500, keep_last=False):
     max_tokens = MODELS_INFO[model]['max_tokens']
     n_tokens_per_message = MODELS_INFO[model]['tokens_per_message']
     tokenizer = MODELS_INFO[model]['tokenizer']
@@ -89,7 +89,7 @@ def get_selenium_driver():
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.5615.49 Safari/537.36"
     )
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--remote-debugging-port=9222")
+    options.add_argument("--no-sandbox")
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     driver = webdriver.Chrome(
@@ -113,7 +113,7 @@ Summarize above reviews.
     response = get_chatgpt_response([{'role': 'user', 'content': prompt}], model='gpt-3.5-turbo', temperature=0)['content']
     return response
 
-def get_reviews(soup):
+def get_reviews(soup, do_summarize_reviews=True):
     sections = soup.find_all('div', class_='place_section')
     review_section = None
     for section in sections:
@@ -124,34 +124,38 @@ def get_reviews(soup):
     if review_section:
         reviews = []
         li_elements = review_section.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
-        for li in li_elements:
+        for li in li_elements[:5]:
             spans = li.find_all('span')
-            review = ' '.join([''.join(span.find_all(string=True, recursive=False)).strip() for span in spans])
+            review = ' '.join([''.join(span.find_all(string=True, recursive=False)).strip() for span in spans])[:1000]
             reviews.append(review)
         if len(reviews) > 0:
+            if do_summarize_reviews:
+                reviews = summarize_reviews(reviews)
             return reviews
     
-def get_place_details(driver, place_url, type='restaurant'):
-    # Open new tab
-    original_window = driver.current_window_handle
-    driver.execute_script("window.open('');")
-    driver.switch_to.window(driver.window_handles[-1])
-
+def get_place_details(place_url, do_summarize_reviews=True):
+    print(f'BROWSING: {place_url}')
+    driver = get_selenium_driver()
     details = {
         'url': place_url,
+        'name': None,
+        'description': None,
         'rating': None,
         'n_visitor_reviews': None,
         'n_blog_reviews': None,
         'reviews': None,
     }
-    if type == 'restaraunt':
-        details['menus'] = None
-    if type == 'accommodation':
-        details['rooms'] = None
-    # ratings
+    
     driver.get(place_url)
     time.sleep(1)
+    place_type = driver.current_url.split('/')[3]
     soup = BeautifulSoup(driver.page_source, 'html.parser')
+    # name / description
+    spans = soup.find('div', {'id': '_title'}).find_all('span')
+    details['name'] = spans[0].text
+    if len(spans) > 1:
+        details['description'] = spans[1].text
+    # ratings
     for span in soup.find('div', {'class': 'place_section'}).find_all('span'):
         text = span.text
         if text.startswith('별점') and (span.find('em') is not None):
@@ -164,9 +168,9 @@ def get_place_details(driver, place_url, type='restaurant'):
     driver.get(f'{place_url}/review/visitor')
     time.sleep(1)
     soup = BeautifulSoup(driver.page_source, 'html.parser')
-    reviews = get_reviews(soup)
+    reviews = get_reviews(soup, do_summarize_reviews=do_summarize_reviews)
     details['reviews'] = reviews
-    if type  == 'restaurant':
+    if place_type  == 'restaurant':
         # menus
         driver.get(f'{place_url}/menu/list')
         time.sleep(1)
@@ -175,7 +179,7 @@ def get_place_details(driver, place_url, type='restaurant'):
             menus = soup.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
             menus = [' '.join(menu.find_all(string=True, recursive=True)).strip() for menu in menus]
             details['menus'] = menus[:5]
-    if type == 'accommodation':
+    if place_type == 'accommodation':
         # rooms
         driver.get(f'{place_url}/room')
         time.sleep(1)
@@ -184,44 +188,31 @@ def get_place_details(driver, place_url, type='restaurant'):
             rooms = soup.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
             rooms = [' '.join(room.find_all(string=True, recursive=True)).strip() for room in rooms]
             details['rooms'] = rooms
-    # Close the new tab and switch back to the original tab
-    driver.close()
-    driver.switch_to.window(original_window)
+    driver.quit()
     return details
 
-def get_nearby_places(
-        keyword,
-        type='restaurant',
+def search_places(
+        query,
         max_results=int(os.getenv('NAVERPLACES_MAX_RESULTS', 5)),
         do_summarize_reviews=bool(os.getenv('NAVERPLACES_SUMMARIZE_REVIEWS', 'True')),
     ):
-    query = keyword
-    if type == 'restaurant':
-        query += ' 근처 맛집'
-    elif type == 'cafe':
-        query += ' 근처 카페'
-        type = 'restaurant'
-    elif type == 'accommodation':
-        query += ' 근처 숙소'
-    else:
-        raise ValueError(f'Unknown type: {type}')
+    # if type == 'restaurant':
+    #     query += ' 근처 맛집'
+    # elif type == 'cafe':
+    #     query += ' 근처 카페'
+    #     type = 'restaurant'
+    # elif type == 'accommodation':
+    #     query += ' 근처 숙소'
+    # else:
+    #     raise ValueError(f'Unknown type: {type}')
     driver = get_selenium_driver()
     naver_map_search_url = f'https://m.map.naver.com/search2/search.naver?query={query}'
     driver.get(naver_map_search_url)
     time.sleep(2)
-    elements = driver.find_elements_by_css_selector('ul.search_list._items a.a_item.a_item_distance._linkSiteview[data-cid]')
-    result = []
-    for element in elements[:max_results]:
-        data_cid = element.get_attribute('data-cid')
-        place_url = f"https://m.place.naver.com/{type}/{data_cid}"
-        print('BROWSING:', place_url)
-        details = get_place_details(driver, place_url, type=type)
-        result.append(details)
-    # summarize reviews
-    if do_summarize_reviews:
-        with concurrent.futures.ThreadPoolExecutor(len(result)) as executor:
-            reviews = executor.map(summarize_reviews, [detail['reviews'] for detail in result])
-        for detail, review in zip(result, reviews):
-            detail['reviews'] = review
+    elements = driver.find_elements_by_css_selector('ul.search_list._items a.a_item.a_item_distance._linkSiteview[data-cid]')[:max_results]
+    def get_place_details_(place_url):
+        return get_place_details(place_url, do_summarize_reviews=do_summarize_reviews)
+    with concurrent.futures.ThreadPoolExecutor(len(elements)) as executor:
+        result = list(executor.map(get_place_details_, [(f"https://m.place.naver.com/place/{element.get_attribute('data-cid')}") for element in elements]))
     driver.quit()
     return result

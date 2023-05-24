@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict, TypeVar
 from auto_gpt_plugin_template import AutoGPTPluginTemplate
 from dotenv import load_dotenv
 
-from .naver_places import get_nearby_places
+from .naver_places import search_places
 
 PromptGenerator = TypeVar("PromptGenerator")
 
@@ -41,10 +41,10 @@ class NaverPlacesPlugin(AutoGPTPluginTemplate):
         """
 
         prompt.add_command(
-            "Get nearby restaurants, cafes, or accommodations from Naver",
-            "get_nearby_places_naver",
-            {"keyword": "keyword", "type": "restaurant/cafe/accommodation"},
-            get_nearby_places,
+            "Search Naver for place(restaurant, cafe, accommodation, tourist site, etc) information",
+            "search_places_naver",
+            {"query": "search query in Korean (ex. 신림역 근처 순대맛집, 여수 호텔, 제주공항 근처 관광지, 광교호수 카페)"},
+            search_places,
         )
         return prompt
 
