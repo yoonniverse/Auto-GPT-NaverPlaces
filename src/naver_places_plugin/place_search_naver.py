@@ -8,7 +8,6 @@ from tqdm import tqdm
 import tiktoken
 import openai
 from trafilatura import fetch_url, extract
-from duckduckgo_search import DDGS
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from selenium import webdriver
@@ -18,7 +17,10 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-load_dotenv('../.env')
+import numpy as np
+from haversine import haversine
+
+load_dotenv('.env')
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 
@@ -26,11 +28,6 @@ MODELS_INFO = {
     'gpt-3.5-turbo': {'max_tokens': 4096, 'pricing': 0.002/1000, 'tokenizer': tiktoken.get_encoding("cl100k_base"), 'tokens_per_message': 5},
     'gpt-4': {'max_tokens': 4096, 'pricing': 0.03/1000, 'tokenizer': tiktoken.get_encoding("cl100k_base"), 'tokens_per_message': 5},
 }
-
-def shorten_url(url):
-    apiurl = f"http://tinyurl.com/api-create.php?url={url}"
-    response = requests.get(apiurl)
-    return response.text
 
 def split_text(text, max_tokens=500, overlap=0, model='gpt-3.5-turbo'):
     tokenizer = MODELS_INFO[model]['tokenizer']
@@ -105,20 +102,12 @@ def get_selenium_driver():
     )
     return driver
 
-
-def summarize_reviews(reviews):
-    if not reviews:
-        return ''
-    review_str = '\n'.join(reviews)
-    prompt = f"""```
-{review_str}
-```
-Summarize above reviews.
-"""
-    response = get_chatgpt_response([{'role': 'user', 'content': prompt}], model='gpt-3.5-turbo', temperature=0)['content']
+def summarize_reviews(reviews, query):
+    message = create_message("\n".join(reviews), query)
+    response = get_chatgpt_response([message], model='gpt-3.5-turbo', temperature=0)['content']
     return response
 
-def get_reviews(soup, do_summarize_reviews=True):
+def get_reviews(soup, query):
     sections = soup.find_all('div', class_='place_section')
     review_section = None
     for section in sections:
@@ -129,34 +118,38 @@ def get_reviews(soup, do_summarize_reviews=True):
     if review_section:
         reviews = []
         li_elements = review_section.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
-        for li in li_elements[:10]:
-            spans = li.find_all('span')
-            review = ' '.join([''.join(span.find_all(string=True, recursive=False)).strip() for span in spans])[:1000]
-            reviews.append(review)
-        if len(reviews) > 0:
-            if do_summarize_reviews:
-                reviews = summarize_reviews(reviews)
+        for li in li_elements[:5]:
+            review_text_element = li.find('a', class_='xHaT3').find('span')
+            if review_text_element:  # 'span' 태그가 존재하면
+                review = review_text_element.get_text(strip=True)
+                reviews.append(review)
+        if len(reviews) > 0:            
+            reviews = summarize_reviews(reviews, query)
             return reviews
 
-def summarize_info(info):
-    if not info:
-        return ''
-    prompt = f"""```
-{info}
-```
-Above text is extracted from html info of a place. Concisely extract key informations from it.
-"""
-    response = get_chatgpt_response([{'role': 'user', 'content': prompt}], model='gpt-3.5-turbo', temperature=0)['content']
-    return response
+def create_message(chunk: str, question: str):
+    if question != '':
+        content = f'"""{chunk}""" Using the above text, answer the following'
+        f' question: "{question}" -- if the question cannot be answered using the text,'
+        " summarize the text. Please output in the language used in the above text.",
+    else:
+        content = (
+            f'"""{chunk}"""'
+            '\nSummarize above reviews.'
+        )
+    
+    return {
+        "role": "user",
+        "content": content
+    }
 
-def get_place_details(place_url, do_summarize_reviews=True, do_summarize_info=False):
+def get_place_details(place_url, query):
     print(f'BROWSING: {place_url}')
     driver = get_selenium_driver()
     details = {
         'url': place_url,
         'name': None,
-        'type': None,
-        'info': None,
+        'description': None,
         'rating': None,
         'n_visitor_reviews': None,
         'n_blog_reviews': None,
@@ -167,18 +160,11 @@ def get_place_details(place_url, do_summarize_reviews=True, do_summarize_info=Fa
     time.sleep(1)
     place_type = driver.current_url.split('/')[3]
     soup = BeautifulSoup(driver.page_source, 'html.parser')
-    # name / type
+    # name / description
     spans = soup.find('div', {'id': '_title'}).find_all('span')
     details['name'] = spans[0].text
     if len(spans) > 1:
-        details['type'] = spans[1].text
-    # info
-    info_section = soup.find_all('div', {'class': 'place_section_content'})[1]
-    divs = info_section.find('div').find_all('div', recursive=False)
-    info = [' '.join(div.find_all(string=True, recursive=True)) for div in divs]
-    if do_summarize_info:
-        info = summarize_info(info)
-    details['info'] = info
+        details['description'] = spans[1].text
     # ratings
     for span in soup.find('div', {'class': 'place_section'}).find_all('span'):
         text = span.text
@@ -192,63 +178,50 @@ def get_place_details(place_url, do_summarize_reviews=True, do_summarize_info=Fa
     driver.get(f'{place_url}/review/visitor')
     time.sleep(1)
     soup = BeautifulSoup(driver.page_source, 'html.parser')
-    reviews = get_reviews(soup, do_summarize_reviews=do_summarize_reviews)
+    reviews = get_reviews(soup, query)
     details['reviews'] = reviews
-    # if place_type  == 'restaurant':
-    #     # menus
-    #     driver.get(f'{place_url}/menu/list')
-    #     time.sleep(1)
-    #     if 'menu' in driver.current_url:
-    #         soup = BeautifulSoup(driver.page_source, 'html.parser')
-    #         menus = soup.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
-    #         menus = [' '.join(menu.find_all(string=True, recursive=True)).strip() for menu in menus]
-    #         details['menus'] = menus[:5]
-    # if place_type == 'accommodation':
-    #     # rooms
-    #     driver.get(f'{place_url}/room')
-    #     time.sleep(1)
-    #     if 'room' in driver.current_url:
-    #         soup = BeautifulSoup(driver.page_source, 'html.parser')
-    #         rooms = soup.find('div', {'class': 'place_section_content'}).find('ul').find_all('li')
-    #         rooms = [' '.join(room.find_all(string=True, recursive=True)).strip() for room in rooms]
-    #         details['rooms'] = rooms
-    # photo
-    driver.get(f'{place_url}/photo')
-    time.sleep(1)
-    if 'photo' in driver.current_url:
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        photos = soup.find('div', {'class': 'place_section_content'}).find_all('img')[:3]
-        photos = [shorten_url(photo['src']) for photo in photos]
-        details['photos'] = photos
     driver.quit()
     return details
 
-def search_places(
-        query,
-        max_results=int(os.getenv('NAVERPLACES_MAX_RESULTS', 5)),
-        do_summarize_reviews=bool(os.getenv('NAVERPLACES_SUMMARIZE_REVIEWS', 'True')),
-        do_summarize_info=bool(os.getenv('NAVERPLACES_SUMMARIZE_INFO', 'False')),
-    ):
-    # if type == 'restaurant':
-    #     query += ' 근처 맛집'
-    # elif type == 'cafe':
-    #     query += ' 근처 카페'
-    #     type = 'restaurant'
-    # elif type == 'accommodation':
-    #     query += ' 근처 숙소'
-    # else:
-    #     raise ValueError(f'Unknown type: {type}')
+def search_places(place_name, query='', max_results=8):    
     driver = get_selenium_driver()
-    naver_map_search_url = f'https://m.map.naver.com/search2/search.naver?query={query}'
+    naver_map_search_url = f'https://m.map.naver.com/search2/search.naver?query={place_name}'
     driver.get(naver_map_search_url)
     time.sleep(2)
-    elements = driver.find_elements_by_css_selector('ul.search_list._items a.a_item.a_item_distance._linkSiteview[data-cid]')[:max_results]
+    elements = driver.find_elements_by_css_selector('li._item._lazyImgContainer')[:max_results]
     if len(elements) == 0:
         driver.quit()
         return []
     def get_place_details_(place_url):
-        return get_place_details(place_url, do_summarize_reviews=do_summarize_reviews)
+        return get_place_details(place_url, query=query)
     with concurrent.futures.ThreadPoolExecutor(len(elements)) as executor:
-        result = list(executor.map(get_place_details_, [(f"https://m.place.naver.com/place/{element.get_attribute('data-cid')}") for element in elements]))
+        results = list(executor.map(get_place_details_, [(f"https://m.place.naver.com/place/{element.get_attribute('data-id')}") for element in elements]))    
+    #results = []
+    for i in range(len(elements)):
+        #place_url = f"https://m.place.naver.com/place/{element.get_attribute('data-id')}"
+        #place_details = get_place_details(place_url, query)
+        results[i]['longitude'] = float(elements[i].get_attribute('data-longitude'))
+        results[i]['latitude'] = float(elements[i].get_attribute('data-latitude'))
+        
     driver.quit()
-    return str(result)+'\nIf above text is too long, save it to file.'
+    
+    num_places = len(results)
+    distances = np.zeros((num_places, num_places))
+    for i in range(num_places):
+        for j in range(num_places):
+            loc_i = (results[i]['latitude'], results[i]['longitude'])
+            loc_j = (results[j]['latitude'], results[j]['longitude'])
+            distances[i, j] = haversine(loc_i, loc_j)
+
+    for result in results:
+        del result['longitude'], result['latitude']
+    
+    distances_str = np.array2string(distances, precision=1, floatmode='fixed')
+    return json.dumps({"candidates": results, "distance_matrix": distances_str}, ensure_ascii=False)
+
+
+if __name__ == '__main__':
+    #get_latitude_longitude('1546882334')
+    results = search_places('광교호수공원 맛집', query='')
+    
+    print(results)
